@@ -2,8 +2,12 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Users, Search, Plus, CreditCard as Edit, Eye, Trash2, X, Mail, Phone, MapPin, Calendar, User as UserIcon, Building2, Briefcase, FileText } from 'lucide-react';
 import { EditStudentModal } from '../components/EditStudentModal';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { ProfileImageDisplay } from '../components/ProfileImageDisplay';
 import { useToast } from '../hooks/useToast';
 import { Toast } from '../components/Toast';
+import { useFieldPermissions, isFieldVisible, isFieldEditable } from '../hooks/useFieldPermissions';
+import { useAuth } from '../contexts/AuthContext';
 
 interface Student {
   id: string;
@@ -37,7 +41,12 @@ interface Student {
 }
 
 export function Students() {
+  const { isSuperAdmin } = useAuth();
   const { toast, showSuccess, showError, hideToast } = useToast();
+  const { student: studentPermissions } = useFieldPermissions();
+
+  const canSee = (fieldName: string) => isFieldVisible(studentPermissions, fieldName, isSuperAdmin);
+  const canEdit = (fieldName: string) => isFieldEditable(studentPermissions, fieldName, isSuperAdmin);
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -46,6 +55,14 @@ export function Students() {
   const [showEdit, setShowEdit] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    variant?: 'danger' | 'warning' | 'info' | 'success';
+    onConfirm: () => void;
+  }>({ isOpen: false, title: '', message: '', onConfirm: () => {} });
   const [addForm, setAddForm] = useState({
     first_name: '',
     last_name: '',
@@ -140,38 +157,46 @@ export function Students() {
   }
 
   async function handleDelete(student: Student) {
-    if (!confirm(`Are you sure you want to delete ${student.full_name}? This action cannot be undone. They will be removed from both the database and authentication system.`)) return;
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Student',
+      message: `Are you sure you want to permanently delete ${student.full_name}? This action cannot be undone and will remove all their data from the system.`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+      onConfirm: async () => {
+        setConfirmDialog({ ...confirmDialog, isOpen: false });
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session) {
+            showError('You must be logged in to perform this action.');
+            return;
+          }
 
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        alert('You must be logged in to perform this action');
-        return;
-      }
+          const response = await fetch(
+            `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/delete-user`,
+            {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${session.access_token}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ profileId: student.id }),
+            }
+          );
 
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/delete-user`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ profileId: student.id }),
+          const result = await response.json();
+
+          if (!response.ok) {
+            showError(`Error deleting student: ${result.error}`);
+          } else {
+            showSuccess('Student deleted successfully!');
+            loadStudents();
+          }
+        } catch (error: any) {
+          showError(`Error deleting student: ${error.message}`);
         }
-      );
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        showError(`Error deleting student: ${result.error}`);
-      } else {
-        showSuccess('Student deleted successfully!');
-        loadStudents();
-      }
-    } catch (error: any) {
-      showError(`Error deleting student: ${error.message}`);
-    }
+      },
+    });
   }
 
   function openEdit(student: Student) {
@@ -363,6 +388,15 @@ export function Students() {
   return (
     <>
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmLabel={confirmDialog.confirmLabel}
+        variant={confirmDialog.variant}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog({ ...confirmDialog, isOpen: false })}
+      />
       <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
@@ -562,57 +596,72 @@ export function Students() {
 
             <form onSubmit={handleAddSubmit} className="p-6 space-y-4">
               <div className="grid md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">First Name <span className="text-red-500">*</span></label>
-                  <input
-                    type="text"
-                    required
-                    value={addForm.first_name}
-                    onChange={(e) => setAddForm({ ...addForm, first_name: e.target.value })}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
+                {canSee('first_name') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">First Name <span className="text-red-500">*</span></label>
+                    <input
+                      type="text"
+                      required
+                      disabled={!canEdit('first_name')}
+                      value={addForm.first_name}
+                      onChange={(e) => setAddForm({ ...addForm, first_name: e.target.value })}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Last Name <span className="text-red-500">*</span></label>
-                  <input
-                    type="text"
-                    required
-                    value={addForm.last_name}
-                    onChange={(e) => setAddForm({ ...addForm, last_name: e.target.value })}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
+                {canSee('last_name') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Last Name <span className="text-red-500">*</span></label>
+                    <input
+                      type="text"
+                      required
+                      disabled={!canEdit('last_name')}
+                      value={addForm.last_name}
+                      onChange={(e) => setAddForm({ ...addForm, last_name: e.target.value })}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Father Name</label>
-                  <input
-                    type="text"
-                    value={addForm.father_name}
-                    onChange={(e) => setAddForm({ ...addForm, father_name: e.target.value })}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
+                {canSee('father_name') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Father Name</label>
+                    <input
+                      type="text"
+                      disabled={!canEdit('father_name')}
+                      value={addForm.father_name}
+                      onChange={(e) => setAddForm({ ...addForm, father_name: e.target.value })}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">National ID</label>
-                  <input
-                    type="text"
-                    value={addForm.national_id}
-                    onChange={(e) => setAddForm({ ...addForm, national_id: e.target.value })}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
+                {canSee('national_id') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">National ID</label>
+                    <input
+                      type="text"
+                      disabled={!canEdit('national_id')}
+                      value={addForm.national_id}
+                      onChange={(e) => setAddForm({ ...addForm, national_id: e.target.value })}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Passport Number</label>
-                  <input
-                    type="text"
-                    value={addForm.passport_number}
-                    onChange={(e) => setAddForm({ ...addForm, passport_number: e.target.value })}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
+                {canSee('passport_number') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Passport Number</label>
+                    <input
+                      type="text"
+                      disabled={!canEdit('passport_number')}
+                      value={addForm.passport_number}
+                      onChange={(e) => setAddForm({ ...addForm, passport_number: e.target.value })}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">Email <span className="text-red-500">*</span></label>
@@ -637,25 +686,31 @@ export function Students() {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Phone</label>
-                  <input
-                    type="tel"
-                    value={addForm.phone}
-                    onChange={(e) => setAddForm({ ...addForm, phone: e.target.value })}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
+                {canSee('phone') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Phone</label>
+                    <input
+                      type="tel"
+                      disabled={!canEdit('phone')}
+                      value={addForm.phone}
+                      onChange={(e) => setAddForm({ ...addForm, phone: e.target.value })}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Parent Phone</label>
-                  <input
-                    type="tel"
-                    value={addForm.parent_phone}
-                    onChange={(e) => setAddForm({ ...addForm, parent_phone: e.target.value })}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
+                {canSee('parent_phone') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Parent Phone</label>
+                    <input
+                      type="tel"
+                      disabled={!canEdit('parent_phone')}
+                      value={addForm.parent_phone}
+                      onChange={(e) => setAddForm({ ...addForm, parent_phone: e.target.value })}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">Age</label>

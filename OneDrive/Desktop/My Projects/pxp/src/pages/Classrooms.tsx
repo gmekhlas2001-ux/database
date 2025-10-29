@@ -52,7 +52,7 @@ interface Enrollment {
 }
 
 export function Classrooms() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [classrooms, setClassrooms] = useState<Classroom[]>([]);
   const [teachers, setTeachers] = useState<any[]>([]);
   const [students, setStudents] = useState<any[]>([]);
@@ -69,6 +69,15 @@ export function Classrooms() {
   const [userProfileId, setUserProfileId] = useState<string>('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
+  // Block librarians from accessing this page
+  if (profile?.role_id === 'librarian') {
+    return (
+      <div className="text-center py-12">
+        <p className="text-slate-600">You don't have access to this page.</p>
+      </div>
+    );
+  }
+
   const [classroomForm, setClassroomForm] = useState({
     name: '',
     code: '',
@@ -84,14 +93,22 @@ export function Classrooms() {
   });
 
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
+  const [enrollmentSearch, setEnrollmentSearch] = useState('');
+  const [selectedStudent, setSelectedStudent] = useState<any>(null);
+  const [showStudentDetails, setShowStudentDetails] = useState(false);
 
   useEffect(() => {
     loadUserProfile();
-    loadClassrooms();
-    loadTeachers();
-    loadStudents();
-    loadBranches();
   }, []);
+
+  useEffect(() => {
+    if (userRole && userProfileId) {
+      loadClassrooms();
+      loadTeachers();
+      loadStudents();
+      loadBranches();
+    }
+  }, [userRole, userProfileId]);
 
   async function loadUserProfile() {
     const { data } = await supabase
@@ -115,7 +132,7 @@ export function Classrooms() {
     const { data } = await supabase
       .from('profiles')
       .select('id, full_name, role_id')
-      .in('role_id', ['admin', 'teacher', 'librarian'])
+      .eq('role_id', 'teacher')
       .in('status', ['approved', 'active'])
       .order('full_name');
 
@@ -135,12 +152,34 @@ export function Classrooms() {
 
   async function loadClassrooms() {
     try {
-      const { data, error } = await supabase
-        .from('classrooms')
-        .select('*, branches(name), profiles!classrooms_teacher_id_fkey(full_name)')
-        .order('created_at', { ascending: false });
+      let data, error;
 
-      if (error) throw error;
+      if (userRole === 'student') {
+        const enrollmentResult = await supabase
+          .from('classroom_enrollments')
+          .select(`
+            classroom_id,
+            classrooms (
+              *,
+              branches(name),
+              profiles!classrooms_teacher_id_fkey(full_name)
+            )
+          `)
+          .eq('student_id', userProfileId)
+          .eq('status', 'active');
+
+        if (enrollmentResult.error) throw enrollmentResult.error;
+
+        data = enrollmentResult.data?.map((enrollment: any) => enrollment.classrooms).filter(Boolean) || [];
+      } else {
+        const classroomResult = await supabase
+          .from('classrooms')
+          .select('*, branches(name), profiles!classrooms_teacher_id_fkey(full_name)')
+          .order('created_at', { ascending: false });
+
+        if (classroomResult.error) throw classroomResult.error;
+        data = classroomResult.data;
+      }
 
       const classroomsWithCounts = await Promise.all(
         (data || []).map(async (classroom) => {
@@ -283,18 +322,27 @@ export function Classrooms() {
   }
 
   async function handleDeleteClassroom(classroom: Classroom) {
-    if (!confirm(`Are you sure you want to delete "${classroom.name}"?`)) return;
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Classroom',
+      message: `Are you sure you want to delete "${classroom.name}"? This action cannot be undone.`,
+      onConfirm: async () => {
+        try {
+          const { error } = await supabase.from('classrooms').delete().eq('id', classroom.id);
 
-    try {
-      const { error } = await supabase.from('classrooms').delete().eq('id', classroom.id);
+          if (error) throw error;
 
-      if (error) throw error;
-
-      setToast({ message: 'Classroom deleted successfully!', type: 'success' });
-      loadClassrooms();
-    } catch (error: any) {
-      setToast({ message: 'Error deleting classroom: ' + error.message, type: 'error' });
-    }
+          setToast({ message: 'Classroom deleted successfully!', type: 'success' });
+          loadClassrooms();
+        } catch (error: any) {
+          setToast({ message: 'Error deleting classroom: ' + error.message, type: 'error' });
+        }
+        setConfirmDialog({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+      },
+      onCancel: () => {
+        setConfirmDialog({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+      }
+    });
   }
 
   async function handleEnrollStudent() {
@@ -303,31 +351,66 @@ export function Classrooms() {
     try {
       const { data: existingEnrollments } = await supabase
         .from('classroom_enrollments')
-        .select('student_id')
+        .select('student_id, status, id')
         .eq('classroom_id', selectedClassroom.id)
         .in('student_id', selectedStudents);
 
-      const alreadyEnrolled = new Set(existingEnrollments?.map(e => e.student_id) || []);
-      const newStudents = selectedStudents.filter(id => !alreadyEnrolled.has(id));
+      const enrollmentMap = new Map(existingEnrollments?.map(e => [e.student_id, e]) || []);
 
-      if (newStudents.length === 0) {
-        setToast({ message: 'All selected students are already enrolled', type: 'error' });
+      const studentsToReactivate: string[] = [];
+      const studentsToInsert: string[] = [];
+      const alreadyActive: string[] = [];
+
+      selectedStudents.forEach(studentId => {
+        const enrollment = enrollmentMap.get(studentId);
+        if (!enrollment) {
+          studentsToInsert.push(studentId);
+        } else if (enrollment.status === 'dropped') {
+          studentsToReactivate.push(enrollment.id);
+        } else if (enrollment.status === 'active') {
+          alreadyActive.push(studentId);
+        }
+      });
+
+      // Reactivate dropped students
+      if (studentsToReactivate.length > 0) {
+        const { error: reactivateError } = await supabase
+          .from('classroom_enrollments')
+          .update({ status: 'active', enrollment_date: new Date().toISOString() })
+          .in('id', studentsToReactivate);
+
+        if (reactivateError) throw reactivateError;
+      }
+
+      // Insert new students
+      if (studentsToInsert.length > 0) {
+        const enrollments = studentsToInsert.map(studentId => ({
+          classroom_id: selectedClassroom.id,
+          student_id: studentId,
+          status: 'active',
+        }));
+
+        const { error: insertError } = await supabase
+          .from('classroom_enrollments')
+          .insert(enrollments);
+
+        if (insertError) throw insertError;
+      }
+
+      const totalEnrolled = studentsToReactivate.length + studentsToInsert.length;
+
+      if (totalEnrolled === 0) {
+        setToast({ message: 'All selected students are already actively enrolled', type: 'error' });
         return;
       }
 
-      const enrollments = newStudents.map(studentId => ({
-        classroom_id: selectedClassroom.id,
-        student_id: studentId,
-        status: 'active',
-      }));
-
-      const { error } = await supabase.from('classroom_enrollments').insert(enrollments);
-
-      if (error) throw error;
-
-      const message = alreadyEnrolled.size > 0
-        ? `${newStudents.length} student(s) enrolled. ${alreadyEnrolled.size} already enrolled.`
-        : 'Students enrolled successfully!';
+      let message = `${totalEnrolled} student(s) enrolled successfully!`;
+      if (studentsToReactivate.length > 0) {
+        message += ` (${studentsToReactivate.length} re-enrolled)`;
+      }
+      if (alreadyActive.length > 0) {
+        message += ` ${alreadyActive.length} already enrolled.`;
+      }
 
       setToast({ message, type: 'success' });
       setShowEnrollModal(false);
@@ -357,14 +440,28 @@ export function Classrooms() {
 
       const { data: existingEnrollment } = await supabase
         .from('classroom_enrollments')
-        .select('id')
+        .select('id, status')
         .eq('classroom_id', classroom.id)
         .eq('student_id', userProfileId)
         .maybeSingle();
 
       if (existingEnrollment) {
-        setToast({ message: 'You are already enrolled in this classroom', type: 'error' });
-        return;
+        if (existingEnrollment.status === 'active') {
+          setToast({ message: 'You are already enrolled in this classroom', type: 'error' });
+          return;
+        } else if (existingEnrollment.status === 'dropped') {
+          // Re-enroll the dropped student
+          const { error } = await supabase
+            .from('classroom_enrollments')
+            .update({ status: 'active', enrollment_date: new Date().toISOString() })
+            .eq('id', existingEnrollment.id);
+
+          if (error) throw error;
+
+          setToast({ message: 'Re-enrolled successfully!', type: 'success' });
+          loadClassrooms();
+          return;
+        }
       }
 
       const { error } = await supabase.from('classroom_enrollments').insert({
@@ -452,6 +549,31 @@ export function Classrooms() {
       loadClassrooms();
     } catch (error: any) {
       setToast({ message: 'Error unenrolling student: ' + error.message, type: 'error' });
+    }
+  }
+
+  async function handleViewStudentDetails(studentId: string) {
+    try {
+      const { data: studentProfile, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', studentId)
+        .maybeSingle();
+
+      if (profileError) throw profileError;
+
+      const { data: studentData, error: studentError } = await supabase
+        .from('students')
+        .select('*')
+        .eq('profile_id', studentId)
+        .maybeSingle();
+
+      if (studentError) throw studentError;
+
+      setSelectedStudent({ ...studentProfile, ...studentData });
+      setShowStudentDetails(true);
+    } catch (error: any) {
+      setToast({ message: 'Error loading student details: ' + error.message, type: 'error' });
     }
   }
 
@@ -616,7 +738,10 @@ export function Classrooms() {
           <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-white border-b border-slate-200 p-6 flex items-center justify-between">
               <h2 className="text-2xl font-bold text-slate-900">{isEditingClassroom ? 'Edit Classroom' : 'Add Classroom'}</h2>
-              <button onClick={() => { setShowAddClassroom(false); setIsEditingClassroom(false); }} className="p-2 hover:bg-slate-100 rounded-lg">
+              <button onClick={() => {
+                setShowAddClassroom(false);
+                setIsEditingClassroom(false);
+              }} className="p-2 hover:bg-slate-100 rounded-lg">
                 <X className="w-6 h-6" />
               </button>
             </div>
@@ -785,7 +910,10 @@ export function Classrooms() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setShowAddClassroom(false); setIsEditingClassroom(false); }}
+                  onClick={() => {
+                    setShowAddClassroom(false);
+                    setIsEditingClassroom(false);
+                  }}
                   className="px-6 py-3 bg-slate-200 text-slate-700 rounded-xl font-medium hover:bg-slate-300"
                 >
                   Cancel
@@ -888,11 +1016,29 @@ export function Classrooms() {
               </div>
 
               <div>
-                <h4 className="font-bold text-lg mb-4">Enrolled Students ({enrollments.filter(e => e.status === 'active').length})</h4>
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="font-bold text-lg">Enrolled Students ({enrollments.filter(e => e.status === 'active').length})</h4>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Search students..."
+                      value={enrollmentSearch}
+                      onChange={(e) => setEnrollmentSearch(e.target.value)}
+                      className="pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-cyan-500 text-sm"
+                    />
+                  </div>
+                </div>
                 <div className="space-y-2">
-                  {enrollments.filter(e => e.status === 'active').map((enrollment) => (
+                  {enrollments
+                    .filter(e => e.status === 'active')
+                    .filter(e => e.student_name.toLowerCase().includes(enrollmentSearch.toLowerCase()))
+                    .map((enrollment) => (
                     <div key={enrollment.id} className="flex items-center justify-between bg-slate-50 p-3 rounded-lg">
-                      <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => handleViewStudentDetails(enrollment.student_id)}
+                        className="flex items-center gap-3 flex-1 text-left hover:bg-slate-100 rounded-lg transition-colors p-2 -m-2"
+                      >
                         <div className="w-10 h-10 bg-cyan-100 rounded-full flex items-center justify-center text-cyan-700 font-bold">
                           {enrollment.student_name.charAt(0)}
                         </div>
@@ -902,7 +1048,7 @@ export function Classrooms() {
                             Enrolled: {new Date(enrollment.enrollment_date).toLocaleDateString()}
                           </p>
                         </div>
-                      </div>
+                      </button>
                       {(isAdmin || (isTeacher && selectedClassroom.teacher_id === userProfileId)) && (
                         <div className="flex gap-2">
                           <button
@@ -926,11 +1072,74 @@ export function Classrooms() {
                       )}
                     </div>
                   ))}
-                  {enrollments.filter(e => e.status === 'active').length === 0 && (
+                  {enrollments
+                    .filter(e => e.status === 'active')
+                    .filter(e => e.student_name.toLowerCase().includes(enrollmentSearch.toLowerCase()))
+                    .length === 0 && enrollmentSearch && (
+                    <p className="text-center py-8 text-slate-500">No students found matching "{enrollmentSearch}"</p>
+                  )}
+                  {enrollments.filter(e => e.status === 'active').length === 0 && !enrollmentSearch && (
                     <p className="text-center py-8 text-slate-500">No students enrolled yet</p>
                   )}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showStudentDetails && selectedStudent && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-slate-200 p-6 flex items-center justify-between">
+              <h2 className="text-2xl font-bold text-slate-900">Student Details</h2>
+              <button onClick={() => setShowStudentDetails(false)} className="p-2 hover:bg-slate-100 rounded-lg">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              <div className="flex items-center gap-4">
+                <div className="w-20 h-20 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-full flex items-center justify-center text-white text-3xl font-bold">
+                  {selectedStudent.full_name?.charAt(0) || 'S'}
+                </div>
+                <div>
+                  <h3 className="text-2xl font-bold text-slate-900">{selectedStudent.full_name}</h3>
+                  <p className="text-slate-600">{selectedStudent.email}</p>
+                </div>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-4">
+                <DetailItem label="Student ID" value={selectedStudent.student_id || 'N/A'} />
+                <DetailItem label="Phone" value={selectedStudent.phone || 'N/A'} />
+                <DetailItem label="Date of Birth" value={selectedStudent.date_of_birth ? new Date(selectedStudent.date_of_birth).toLocaleDateString() : 'N/A'} />
+                <DetailItem label="Gender" value={selectedStudent.gender || 'N/A'} />
+                <DetailItem label="Nationality" value={selectedStudent.nationality || 'N/A'} />
+                <DetailItem label="Guardian Name" value={selectedStudent.guardian_name || 'N/A'} />
+                <DetailItem label="Guardian Phone" value={selectedStudent.guardian_phone || 'N/A'} />
+                <DetailItem label="Emergency Contact" value={selectedStudent.emergency_contact || 'N/A'} />
+              </div>
+
+              {selectedStudent.address && (
+                <div className="bg-slate-50 p-4 rounded-xl">
+                  <p className="text-xs text-slate-500 mb-1">Address</p>
+                  <p className="text-slate-900">{selectedStudent.address}</p>
+                </div>
+              )}
+
+              {selectedStudent.medical_info && (
+                <div className="bg-amber-50 p-4 rounded-xl border border-amber-200">
+                  <p className="text-xs text-amber-700 mb-1 font-medium">Medical Information</p>
+                  <p className="text-slate-900">{selectedStudent.medical_info}</p>
+                </div>
+              )}
+
+              {selectedStudent.notes && (
+                <div className="bg-slate-50 p-4 rounded-xl">
+                  <p className="text-xs text-slate-500 mb-1">Notes</p>
+                  <p className="text-slate-900">{selectedStudent.notes}</p>
+                </div>
+              )}
             </div>
           </div>
         </div>

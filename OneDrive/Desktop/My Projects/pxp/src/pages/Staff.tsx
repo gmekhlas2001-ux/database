@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { UserCheck, Search, Plus, Edit, Eye, ShieldCheck, Trash2, X, Mail, Phone, MapPin, Calendar, User, Building2, Briefcase, FileText, File, ExternalLink } from 'lucide-react';
+import { UserCheck, Search, Plus, Edit, Eye, ShieldCheck, Trash2, X, Mail, Phone, MapPin, Calendar, User, Building2, Briefcase, FileText, File, Download, MessageSquare, Star } from 'lucide-react';
 import { DocumentUpload } from '../components/DocumentUpload';
 import { AddStaffModal } from '../components/AddStaffModal';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { ProfileImageDisplay } from '../components/ProfileImageDisplay';
+import { DocumentDownloadButton } from '../components/DocumentDownloadButton';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/useToast';
 import { Toast } from '../components/Toast';
+import { useFieldPermissions, isFieldVisible, isFieldEditable } from '../hooks/useFieldPermissions';
 
 interface StaffMember {
   id: string;
@@ -15,6 +19,7 @@ interface StaffMember {
   email: string;
   role_id: string;
   status: string;
+  is_super_admin: boolean | null;
   created_at: string;
   first_name: string | null;
   last_name: string | null;
@@ -46,11 +51,16 @@ interface StaffMember {
 }
 
 export function Staff() {
-  const { isSuperAdmin } = useAuth();
+  const { isSuperAdmin, profile } = useAuth();
   const { toast, showSuccess, showError, hideToast } = useToast();
+  const { staff: staffPermissions } = useFieldPermissions();
+
+  const canSee = (fieldName: string) => isFieldVisible(staffPermissions, fieldName, isSuperAdmin);
+  const canEdit = (fieldName: string) => isFieldEditable(staffPermissions, fieldName, isSuperAdmin);
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [feedback, setFeedback] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [selectedMember, setSelectedMember] = useState<StaffMember | null>(null);
   const [showDetails, setShowDetails] = useState(false);
@@ -77,6 +87,14 @@ export function Staff() {
     job_description: '',
     short_bio: '',
   });
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    variant?: 'danger' | 'warning' | 'info' | 'success';
+    onConfirm: () => void;
+  }>({ isOpen: false, title: '', message: '', onConfirm: () => {} });
 
   useEffect(() => {
     loadStaff();
@@ -116,6 +134,7 @@ export function Staff() {
               email: profile.email,
               role_id: profile.role_id,
               status: profile.status,
+              is_super_admin: (profile as any).is_super_admin || false,
               created_at: profile.created_at,
               first_name: staffData?.first_name || null,
               last_name: staffData?.last_name || null,
@@ -158,54 +177,100 @@ export function Staff() {
   }
 
   async function handlePromoteToAdmin(member: StaffMember) {
-    if (!confirm(`Are you sure you want to promote ${member.full_name} to admin?`)) return;
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Promote to Admin',
+      message: `Are you sure you want to promote ${member.full_name} to admin role? This will grant them administrative privileges.`,
+      confirmLabel: 'Promote',
+      variant: 'info',
+      onConfirm: async () => {
+        setConfirmDialog({ ...confirmDialog, isOpen: false });
+        const { error } = await supabase
+          .from('profiles')
+          .update({ role_id: 'admin' })
+          .eq('id', member.id);
 
-    const { error } = await supabase
-      .from('profiles')
-      .update({ role_id: 'admin' })
-      .eq('id', member.id);
+        if (error) {
+          showError('Error promoting to admin: ' + error.message);
+        } else {
+          showSuccess('Successfully promoted to admin!');
+          loadStaff();
+        }
+      },
+    });
+  }
 
-    if (error) {
-      showError('Error promoting to admin: ' + error.message);
-    } else {
-      showSuccess('Successfully promoted to admin!');
-      loadStaff();
-    }
+  async function handlePromoteToSuperAdmin(member: StaffMember) {
+    const currentStatus = member.is_super_admin;
+    const action = currentStatus ? 'demote' : 'promote';
+    const newStatus = !currentStatus;
+
+    setConfirmDialog({
+      isOpen: true,
+      title: currentStatus ? 'Remove Super Admin Access' : 'Grant Super Admin Access',
+      message: currentStatus
+        ? `Are you sure you want to remove super admin privileges from ${member.full_name}? They will retain regular admin access.`
+        : `Are you sure you want to grant super admin privileges to ${member.full_name}? This will provide the highest level of system access.`,
+      confirmLabel: currentStatus ? 'Remove Access' : 'Grant Access',
+      variant: currentStatus ? 'warning' : 'success',
+      onConfirm: async () => {
+        setConfirmDialog({ ...confirmDialog, isOpen: false });
+        const { error } = await supabase
+          .from('profiles')
+          .update({ is_super_admin: newStatus })
+          .eq('id', member.id);
+
+        if (error) {
+          showError(`Error ${action}ing to super admin: ` + error.message);
+        } else {
+          showSuccess(`Successfully ${action}d ${currentStatus ? 'from' : 'to'} super admin!`);
+          loadStaff();
+        }
+      },
+    });
   }
 
   async function handleDelete(member: StaffMember) {
-    if (!confirm(`Are you sure you want to delete ${member.full_name}? This action cannot be undone. They will be removed from both the database and authentication system.`)) return;
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Staff Member',
+      message: `Are you sure you want to permanently delete ${member.full_name}? This action cannot be undone and will remove all their data from the system.`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+      onConfirm: async () => {
+        setConfirmDialog({ ...confirmDialog, isOpen: false });
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session) {
+            showError('You must be logged in to perform this action.');
+            return;
+          }
 
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        alert('You must be logged in to perform this action');
-        return;
-      }
+          const response = await fetch(
+            `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/delete-user`,
+            {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${session.access_token}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ profileId: member.id }),
+            }
+          );
 
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/delete-user`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ profileId: member.id }),
+          const result = await response.json();
+
+          if (!response.ok) {
+            showError(`Error deleting staff member: ${result.error}`);
+          } else {
+            showSuccess('Staff member deleted successfully!');
+            loadStaff();
+          }
+        } catch (error: any) {
+          showError(`Error deleting staff member: ${error.message}`);
         }
-      );
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        showError(`Error deleting staff member: ${result.error}`);
-      } else {
-        showSuccess('Staff member deleted successfully!');
-        loadStaff();
-      }
-    } catch (error: any) {
-      showError(`Error deleting staff member: ${error.message}`);
-    }
+      },
+    });
   }
 
   function openEdit(member: StaffMember) {
@@ -244,9 +309,29 @@ export function Staff() {
     setShowEdit(true);
   }
 
-  function openDetails(member: StaffMember) {
+  async function openDetails(member: StaffMember) {
     setSelectedMember(member);
     setShowDetails(true);
+    await loadFeedback(member.profile_id);
+  }
+
+  async function loadFeedback(teacherId: string) {
+    try {
+      const { data, error } = await supabase
+        .from('teacher_feedback')
+        .select(`
+          *,
+          student:profiles!teacher_feedback_student_id_fkey(full_name)
+        `)
+        .eq('teacher_id', teacherId)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setFeedback(data || []);
+    } catch (error: any) {
+      console.error('Error loading feedback:', error);
+      setFeedback([]);
+    }
   }
 
   async function handleEditSubmit(e: React.FormEvent) {
@@ -412,6 +497,15 @@ export function Staff() {
   return (
     <>
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmLabel={confirmDialog.confirmLabel}
+        variant={confirmDialog.variant}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog({ ...confirmDialog, isOpen: false })}
+      />
       <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
@@ -465,8 +559,8 @@ export function Staff() {
 
               <div className="p-6 -mt-12">
                 {member.profile_photo_url ? (
-                  <img
-                    src={member.profile_photo_url}
+                  <ProfileImageDisplay
+                    filePath={member.profile_photo_url}
                     alt={member.full_name}
                     className="w-24 h-24 rounded-2xl object-cover border-4 border-white shadow-lg mb-4"
                   />
@@ -477,7 +571,14 @@ export function Staff() {
                 )}
 
                 <div className="space-y-2 mb-4">
-                  <h3 className="text-xl font-bold text-slate-900">{member.full_name}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xl font-bold text-slate-900">{member.full_name}</h3>
+                    {member.is_super_admin && (
+                      <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs font-semibold rounded-full border border-yellow-300" title="Super Admin">
+                        S
+                      </span>
+                    )}
+                  </div>
                   <p className="text-sm text-slate-600 capitalize">
                     {member.position || member.role_id}
                   </p>
@@ -520,11 +621,25 @@ export function Staff() {
                   {isSuperAdmin && (member.role_id === 'teacher' || member.role_id === 'librarian') && (
                     <button
                       onClick={() => handlePromoteToAdmin(member)}
-                      className="flex items-center justify-center gap-1 px-3 py-2 bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100 transition-colors text-sm font-medium"
+                      className="flex items-center justify-center gap-1 px-3 py-2 bg-teal-50 text-teal-600 rounded-lg hover:bg-teal-100 transition-colors text-sm font-medium"
                       title="Promote to Admin"
                     >
                       <ShieldCheck className="w-4 h-4" />
                       Admin
+                    </button>
+                  )}
+                  {isSuperAdmin && member.role_id === 'admin' && (
+                    <button
+                      onClick={() => handlePromoteToSuperAdmin(member)}
+                      className={`flex items-center justify-center gap-1 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
+                        member.is_super_admin
+                          ? 'bg-orange-50 text-orange-600 hover:bg-orange-100'
+                          : 'bg-green-50 text-green-600 hover:bg-green-100'
+                      }`}
+                      title={member.is_super_admin ? 'Demote from Super Admin' : 'Promote to Super Admin'}
+                    >
+                      <ShieldCheck className="w-4 h-4" />
+                      {member.is_super_admin ? 'Demote' : 'Super'}
                     </button>
                   )}
                   {(isSuperAdmin || member.role_id !== 'admin') && (
@@ -560,8 +675,8 @@ export function Staff() {
             <div className="p-6 space-y-6">
               <div className="flex items-center gap-4">
                 {selectedMember.profile_photo_url ? (
-                  <img
-                    src={selectedMember.profile_photo_url}
+                  <ProfileImageDisplay
+                    filePath={selectedMember.profile_photo_url}
                     alt={selectedMember.full_name}
                     className="w-20 h-20 rounded-2xl object-cover border-2 border-slate-200"
                   />
@@ -601,7 +716,7 @@ export function Staff() {
                 <DetailItem icon={Mail} label="Email" value={selectedMember.email} />
                 <DetailItem icon={Phone} label="Phone" value={selectedMember.phone} />
                 <DetailItem icon={Phone} label="Emergency Contact" value={selectedMember.emergency_contact} />
-                <DetailItem icon={MapPin} label="Address" value={selectedMember.address} />
+                {canSee('address') && <DetailItem icon={MapPin} label="Address" value={selectedMember.address} />}
                 <DetailItem icon={Briefcase} label="Position" value={selectedMember.position} />
                 <DetailItem icon={Calendar} label="Date Joined" value={selectedMember.date_joined} />
                 <DetailItem icon={Calendar} label="Date Left" value={selectedMember.date_left} />
@@ -609,21 +724,21 @@ export function Staff() {
                 <DetailItem icon={User} label="Status" value={selectedMember.status} />
               </div>
 
-              {selectedMember.job_description && (
+              {canSee('job_description') && selectedMember.job_description && (
                 <div>
                   <h4 className="font-semibold text-slate-900 mb-2">Job Description</h4>
                   <p className="text-slate-700 bg-slate-50 p-4 rounded-xl">{selectedMember.job_description}</p>
                 </div>
               )}
 
-              {selectedMember.history_activities && (
+              {canSee('history_activities') && selectedMember.history_activities && (
                 <div>
                   <h4 className="font-semibold text-slate-900 mb-2">History & Activities</h4>
                   <p className="text-slate-700 bg-slate-50 p-4 rounded-xl">{selectedMember.history_activities}</p>
                 </div>
               )}
 
-              {selectedMember.notes && (
+              {canSee('notes') && selectedMember.notes && (
                 <div>
                   <h4 className="font-semibold text-slate-900 mb-2">Notes</h4>
                   <p className="text-slate-700 bg-slate-50 p-4 rounded-xl">{selectedMember.notes}</p>
@@ -636,79 +751,104 @@ export function Staff() {
                 <div className="border-t border-slate-200 pt-6">
                   <h4 className="font-semibold text-slate-900 mb-4">Documents</h4>
                   <div className="grid md:grid-cols-2 gap-3">
-                    {selectedMember.profile_photo_url && (
-                      <a
-                        href={selectedMember.profile_photo_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition-colors"
-                      >
-                        <File className="w-5 h-5 text-blue-600" />
-                        <span className="text-sm text-blue-700 font-medium">Profile Photo</span>
-                        <ExternalLink className="w-4 h-4 text-blue-600 ml-auto" />
-                      </a>
-                    )}
-                    {selectedMember.cv_url && (
-                      <a
-                        href={selectedMember.cv_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-xl hover:bg-green-100 transition-colors"
-                      >
-                        <File className="w-5 h-5 text-green-600" />
-                        <span className="text-sm text-green-700 font-medium">CV/Resume</span>
-                        <ExternalLink className="w-4 h-4 text-green-600 ml-auto" />
-                      </a>
-                    )}
-                    {selectedMember.nid_photo_url && (
-                      <a
-                        href={selectedMember.nid_photo_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 p-3 bg-purple-50 border border-purple-200 rounded-xl hover:bg-purple-100 transition-colors"
-                      >
-                        <File className="w-5 h-5 text-purple-600" />
-                        <span className="text-sm text-purple-700 font-medium">National ID Photo</span>
-                        <ExternalLink className="w-4 h-4 text-purple-600 ml-auto" />
-                      </a>
-                    )}
-                    {selectedMember.passport_photo_url && (
-                      <a
-                        href={selectedMember.passport_photo_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 p-3 bg-orange-50 border border-orange-200 rounded-xl hover:bg-orange-100 transition-colors"
-                      >
-                        <File className="w-5 h-5 text-orange-600" />
-                        <span className="text-sm text-orange-700 font-medium">Passport Photo</span>
-                        <ExternalLink className="w-4 h-4 text-orange-600 ml-auto" />
-                      </a>
-                    )}
-                    {selectedMember.education_docs_url && (
-                      <a
-                        href={selectedMember.education_docs_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 p-3 bg-indigo-50 border border-indigo-200 rounded-xl hover:bg-indigo-100 transition-colors"
-                      >
-                        <File className="w-5 h-5 text-indigo-600" />
-                        <span className="text-sm text-indigo-700 font-medium">Education Documents</span>
-                        <ExternalLink className="w-4 h-4 text-indigo-600 ml-auto" />
-                      </a>
-                    )}
-                    {selectedMember.family_parents_tazkira_url && (
-                      <a
-                        href={selectedMember.family_parents_tazkira_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 p-3 bg-pink-50 border border-pink-200 rounded-xl hover:bg-pink-100 transition-colors"
-                      >
-                        <File className="w-5 h-5 text-pink-600" />
-                        <span className="text-sm text-pink-700 font-medium">Family/Parents Tazkira</span>
-                        <ExternalLink className="w-4 h-4 text-pink-600 ml-auto" />
-                      </a>
+                    <DocumentDownloadButton
+                      filePath={selectedMember.profile_photo_url}
+                      label="Profile Photo"
+                      colorClass="bg-blue-50 border-blue-200 hover:bg-blue-100 text-blue-700"
+                    />
+                    <DocumentDownloadButton
+                      filePath={selectedMember.cv_url}
+                      label="CV/Resume"
+                      colorClass="bg-green-50 border-green-200 hover:bg-green-100 text-green-700"
+                    />
+                    <DocumentDownloadButton
+                      filePath={selectedMember.nid_photo_url}
+                      label="National ID Photo"
+                      colorClass="bg-purple-50 border-purple-200 hover:bg-purple-100 text-purple-700"
+                    />
+                    <DocumentDownloadButton
+                      filePath={selectedMember.passport_photo_url}
+                      label="Passport Photo"
+                      colorClass="bg-orange-50 border-orange-200 hover:bg-orange-100 text-orange-700"
+                    />
+                    <DocumentDownloadButton
+                      filePath={selectedMember.education_docs_url}
+                      label="Education Documents"
+                      colorClass="bg-teal-50 border-teal-200 hover:bg-teal-100 text-teal-700"
+                    />
+                    <DocumentDownloadButton
+                      filePath={selectedMember.family_parents_tazkira_url}
+                      label="Family/Parents Tazkira"
+                      colorClass="bg-pink-50 border-pink-200 hover:bg-pink-100 text-pink-700"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {selectedMember.role_id === 'teacher' && (
+                <div>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <MessageSquare className="w-5 h-5 text-slate-700" />
+                      <h4 className="font-bold text-lg text-slate-900">Student Feedback</h4>
+                      {feedback.length > 0 && (
+                        <span className="bg-slate-200 text-slate-700 text-xs font-semibold px-2 py-1 rounded-full">
+                          {feedback.length}
+                        </span>
+                      )}
+                    </div>
+                    {feedback.length > 0 && (
+                      <div className="flex items-center gap-2">
+                        <Star className="w-4 h-4 fill-amber-400 text-amber-400" />
+                        <span className="text-sm font-semibold text-slate-900">
+                          {(feedback.reduce((sum: number, fb: any) => sum + (fb.rating || 0), 0) / feedback.length).toFixed(1)}
+                        </span>
+                        <span className="text-xs text-slate-500">avg</span>
+                      </div>
                     )}
                   </div>
+                  {feedback.length > 0 ? (
+                    <div className="bg-slate-50 rounded-xl border border-slate-200 max-h-96 overflow-y-auto">
+                      <div className="divide-y divide-slate-200">
+                        {feedback.map((fb: any) => (
+                          <div key={fb.id} className="p-4 hover:bg-slate-100 transition-colors">
+                            <div className="flex items-start justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                {!fb.is_anonymous && fb.student?.full_name && (
+                                  <span className="text-sm font-medium text-slate-900">{fb.student.full_name}</span>
+                                )}
+                                {fb.is_anonymous && (
+                                  <span className="text-sm font-medium text-slate-500">Anonymous</span>
+                                )}
+                                {fb.rating && (
+                                  <div className="flex items-center gap-0.5">
+                                    {[...Array(5)].map((_, i) => (
+                                      <Star
+                                        key={i}
+                                        className={`w-3.5 h-3.5 ${
+                                          i < fb.rating
+                                            ? 'fill-amber-400 text-amber-400'
+                                            : 'text-slate-300'
+                                        }`}
+                                      />
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                              <span className="text-xs text-slate-500">
+                                {new Date(fb.created_at).toLocaleDateString()}
+                              </span>
+                            </div>
+                            <p className="text-slate-700 text-sm leading-relaxed">{fb.feedback_text}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-slate-50 rounded-xl border border-slate-200 py-12">
+                      <p className="text-center text-slate-500">No feedback yet</p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -753,69 +893,87 @@ export function Staff() {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">First Name</label>
-                  <input
-                    type="text"
-                    value={editForm.first_name}
-                    onChange={(e) => setEditForm({ ...editForm, first_name: e.target.value })}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                  />
-                </div>
+                {canSee('first_name') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">First Name</label>
+                    <input
+                      type="text"
+                      disabled={!canEdit('first_name')}
+                      value={editForm.first_name}
+                      onChange={(e) => setEditForm({ ...editForm, first_name: e.target.value })}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Last Name</label>
-                  <input
-                    type="text"
-                    value={editForm.last_name}
-                    onChange={(e) => setEditForm({ ...editForm, last_name: e.target.value })}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                  />
-                </div>
+                {canSee('last_name') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Last Name</label>
+                    <input
+                      type="text"
+                      disabled={!canEdit('last_name')}
+                      value={editForm.last_name}
+                      onChange={(e) => setEditForm({ ...editForm, last_name: e.target.value })}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Father's Name</label>
-                  <input
-                    type="text"
-                    value={editForm.father_name}
-                    onChange={(e) => setEditForm({ ...editForm, father_name: e.target.value })}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                  />
-                </div>
+                {canSee('father_name') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Father's Name</label>
+                    <input
+                      type="text"
+                      disabled={!canEdit('father_name')}
+                      value={editForm.father_name}
+                      onChange={(e) => setEditForm({ ...editForm, father_name: e.target.value })}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Date of Birth</label>
-                  <input
-                    type="date"
-                    value={editForm.dob}
-                    onChange={(e) => setEditForm({ ...editForm, dob: e.target.value })}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                  />
-                </div>
+                {canSee('dob') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Date of Birth</label>
+                    <input
+                      type="date"
+                      disabled={!canEdit('dob')}
+                      value={editForm.dob}
+                      onChange={(e) => setEditForm({ ...editForm, dob: e.target.value })}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Age</label>
-                  <input
-                    type="number"
-                    value={editForm.age}
-                    onChange={(e) => setEditForm({ ...editForm, age: e.target.value })}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                  />
-                </div>
+                {canSee('age') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Age</label>
+                    <input
+                      type="number"
+                      disabled={!canEdit('age')}
+                      value={editForm.age}
+                      onChange={(e) => setEditForm({ ...editForm, age: e.target.value })}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Gender</label>
-                  <select
-                    value={editForm.gender}
-                    onChange={(e) => setEditForm({ ...editForm, gender: e.target.value })}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                  >
-                    <option value="">Select Gender</option>
-                    <option value="male">Male</option>
-                    <option value="female">Female</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
+                {canSee('gender') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Gender</label>
+                    <select
+                      disabled={!canEdit('gender')}
+                      value={editForm.gender}
+                      onChange={(e) => setEditForm({ ...editForm, gender: e.target.value })}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    >
+                      <option value="">Select Gender</option>
+                      <option value="male">Male</option>
+                      <option value="female">Female</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">National ID</label>
@@ -935,55 +1093,70 @@ export function Staff() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Address</label>
-                <textarea
-                  rows={2}
-                  value={editForm.address}
-                  onChange={(e) => setEditForm({ ...editForm, address: e.target.value })}
-                  className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none"
-                />
-              </div>
+              {canSee('address') && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Address</label>
+                  <textarea
+                    rows={2}
+                    disabled={!canEdit('address')}
+                    value={editForm.address}
+                    onChange={(e) => setEditForm({ ...editForm, address: e.target.value })}
+                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none disabled:bg-slate-100 disabled:cursor-not-allowed"
+                  />
+                </div>
+              )}
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Job Description</label>
-                <textarea
-                  rows={3}
-                  value={editForm.job_description}
-                  onChange={(e) => setEditForm({ ...editForm, job_description: e.target.value })}
-                  className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none"
-                />
-              </div>
+              {canSee('job_description') && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Job Description</label>
+                  <textarea
+                    rows={3}
+                    disabled={!canEdit('job_description')}
+                    value={editForm.job_description}
+                    onChange={(e) => setEditForm({ ...editForm, job_description: e.target.value })}
+                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none disabled:bg-slate-100 disabled:cursor-not-allowed"
+                  />
+                </div>
+              )}
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Short Bio</label>
-                <textarea
-                  rows={3}
-                  value={editForm.short_bio}
-                  onChange={(e) => setEditForm({ ...editForm, short_bio: e.target.value })}
-                  className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none"
-                />
-              </div>
+              {canSee('short_bio') && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Short Bio</label>
+                  <textarea
+                    rows={3}
+                    disabled={!canEdit('short_bio')}
+                    value={editForm.short_bio}
+                    onChange={(e) => setEditForm({ ...editForm, short_bio: e.target.value })}
+                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none disabled:bg-slate-100 disabled:cursor-not-allowed"
+                  />
+                </div>
+              )}
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">History & Activities</label>
-                <textarea
-                  rows={3}
-                  value={editForm.history_activities}
-                  onChange={(e) => setEditForm({ ...editForm, history_activities: e.target.value })}
-                  className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none"
-                />
-              </div>
+              {canSee('history_activities') && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">History & Activities</label>
+                  <textarea
+                    rows={3}
+                    disabled={!canEdit('history_activities')}
+                    value={editForm.history_activities}
+                    onChange={(e) => setEditForm({ ...editForm, history_activities: e.target.value })}
+                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none disabled:bg-slate-100 disabled:cursor-not-allowed"
+                  />
+                </div>
+              )}
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Notes</label>
-                <textarea
-                  rows={3}
-                  value={editForm.notes}
-                  onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
-                  className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none"
-                />
-              </div>
+              {canSee('notes') && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Notes</label>
+                  <textarea
+                    rows={3}
+                    disabled={!canEdit('notes')}
+                    value={editForm.notes}
+                    onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
+                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none disabled:bg-slate-100 disabled:cursor-not-allowed"
+                  />
+                </div>
+              )}
 
               <div className="border-t border-slate-200 pt-6 mt-6">
                 <h3 className="text-lg font-semibold text-slate-900 mb-4">Documents</h3>

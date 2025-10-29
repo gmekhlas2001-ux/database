@@ -1,7 +1,8 @@
 import { ReactNode, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { BookOpen, LayoutDashboard, Users, UserCheck, Building2, GraduationCap, Library, FileText, Bell, LogOut, Menu, X, CheckCircle, CircleUser as UserCircle } from 'lucide-react';
+import { useLanguage } from '../contexts/LanguageContext';
+import { BookOpen, LayoutDashboard, Users, UserCheck, Building2, GraduationCap, Library, FileText, Bell, LogOut, Menu, X, CheckCircle, CircleUser as UserCircle, Award, TrendingUp, Settings, Languages } from 'lucide-react';
 
 interface LayoutProps {
   children: ReactNode;
@@ -9,9 +10,11 @@ interface LayoutProps {
 
 export function Layout({ children }: LayoutProps) {
   const { profile, signOut } = useAuth();
+  const { language, setLanguage, t } = useLanguage();
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showLangMenu, setShowLangMenu] = useState(false);
 
   const handleSignOut = async () => {
     await signOut();
@@ -19,20 +22,27 @@ export function Layout({ children }: LayoutProps) {
   };
 
   const navItems = [
-    { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'teacher', 'librarian', 'student'] },
-    { path: '/approvals', label: 'Approvals', icon: CheckCircle, roles: ['admin'] },
-    { path: '/staff', label: 'Staff', icon: UserCheck, roles: ['admin'] },
-    { path: '/students', label: 'Students', icon: Users, roles: ['admin'] },
-    { path: '/branches', label: 'Branches', icon: Building2, roles: ['admin'] },
-    { path: '/classrooms', label: 'Classrooms', icon: GraduationCap, roles: ['admin', 'teacher', 'librarian', 'student'] },
-    { path: '/libraries/books', label: 'Library', icon: Library, roles: ['admin', 'teacher', 'librarian', 'student'] },
-    { path: '/reports', label: 'Reports', icon: FileText, roles: ['admin'] },
-    { path: '/profile', label: 'Profile', icon: UserCircle, roles: ['admin', 'teacher', 'librarian', 'student'] },
+    { path: '/dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard, roles: ['admin', 'teacher', 'librarian', 'student'] },
+    { path: '/approvals', labelKey: 'nav.approvals', icon: CheckCircle, roles: ['admin'] },
+    { path: '/staff', labelKey: 'nav.staff', icon: UserCheck, roles: ['admin'] },
+    { path: '/students', labelKey: 'nav.students', icon: Users, roles: ['admin'] },
+    { path: '/branches', labelKey: 'nav.branches', icon: Building2, roles: ['admin'] },
+    { path: '/classrooms', labelKey: 'nav.classrooms', icon: GraduationCap, roles: ['admin', 'teacher', 'student'] },
+    { path: '/exams', labelKey: 'nav.exams', icon: Award, roles: ['admin', 'teacher'] },
+    { path: '/grades', labelKey: 'nav.grades', icon: TrendingUp, roles: ['student'] },
+    { path: '/libraries/books', labelKey: 'nav.library', icon: Library, roles: ['admin', 'teacher', 'librarian', 'student'] },
+    { path: '/reports', labelKey: 'nav.reports', icon: FileText, roles: ['admin'] },
+    { path: '/settings', labelKey: 'nav.settings', icon: Settings, roles: ['admin'], superAdminOnly: true },
+    { path: '/profile', labelKey: 'nav.profile', icon: UserCircle, roles: ['admin', 'teacher', 'librarian', 'student'] },
   ];
 
-  const visibleNavItems = navItems.filter((item) =>
-    item.roles.includes(profile?.role_id || '')
-  );
+  const visibleNavItems = navItems.filter((item) => {
+    const hasRole = item.roles.includes(profile?.role_id || '');
+    if (item.superAdminOnly) {
+      return hasRole && profile?.is_super_admin === true;
+    }
+    return hasRole;
+  });
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -81,6 +91,45 @@ export function Layout({ children }: LayoutProps) {
                 <p className="text-xs text-slate-500 capitalize">{profile?.role_id}</p>
               </div>
             </div>
+
+            {/* Language Selector */}
+            <div className="mt-4 relative">
+              <button
+                onClick={() => setShowLangMenu(!showLangMenu)}
+                className="flex items-center justify-between w-full px-3 py-2 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                <div className="flex items-center space-x-2">
+                  <Languages className="w-4 h-4 text-slate-600" />
+                  <span className="text-sm text-slate-700">
+                    {language === 'en' && 'English'}
+                    {language === 'es' && 'Español'}
+                    {language === 'ca' && 'Català'}
+                  </span>
+                </div>
+              </button>
+              {showLangMenu && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50">
+                  <button
+                    onClick={() => { setLanguage('en'); setShowLangMenu(false); }}
+                    className={`w-full px-3 py-2 text-left text-sm hover:bg-slate-50 transition-colors first:rounded-t-lg ${language === 'en' ? 'bg-blue-50 text-blue-600' : 'text-slate-700'}`}
+                  >
+                    English
+                  </button>
+                  <button
+                    onClick={() => { setLanguage('es'); setShowLangMenu(false); }}
+                    className={`w-full px-3 py-2 text-left text-sm hover:bg-slate-50 transition-colors ${language === 'es' ? 'bg-blue-50 text-blue-600' : 'text-slate-700'}`}
+                  >
+                    Español
+                  </button>
+                  <button
+                    onClick={() => { setLanguage('ca'); setShowLangMenu(false); }}
+                    className={`w-full px-3 py-2 text-left text-sm hover:bg-slate-50 transition-colors last:rounded-b-lg ${language === 'ca' ? 'bg-blue-50 text-blue-600' : 'text-slate-700'}`}
+                  >
+                    Català
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Navigation */}
@@ -101,7 +150,7 @@ export function Layout({ children }: LayoutProps) {
                       }`}
                     >
                       <Icon className="w-5 h-5" />
-                      <span className="font-medium">{item.label}</span>
+                      <span className="font-medium">{t(item.labelKey)}</span>
                     </Link>
                   </li>
                 );
@@ -116,7 +165,7 @@ export function Layout({ children }: LayoutProps) {
               className="flex items-center space-x-3 px-4 py-3 rounded-xl text-slate-600 hover:bg-red-50 hover:text-red-600 transition-all w-full"
             >
               <LogOut className="w-5 h-5" />
-              <span className="font-medium">Sign Out</span>
+              <span className="font-medium">{t('nav.logout')}</span>
             </button>
           </div>
         </div>

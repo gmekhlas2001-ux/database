@@ -1,0 +1,268 @@
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+
+type Language = 'en' | 'es' | 'ca';
+
+interface LanguageContextType {
+  language: Language;
+  setLanguage: (lang: Language) => void;
+  t: (key: string) => string;
+}
+
+const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
+
+const translations: Record<Language, Record<string, string>> = {
+  en: {
+    'nav.dashboard': 'Dashboard',
+    'nav.students': 'Students',
+    'nav.staff': 'Staff',
+    'nav.classrooms': 'Classrooms',
+    'nav.library': 'Library',
+    'nav.exams': 'Exams',
+    'nav.grades': 'Grades',
+    'nav.branches': 'Branches',
+    'nav.approvals': 'Approvals',
+    'nav.reports': 'Reports',
+    'nav.settings': 'Settings',
+    'nav.profile': 'Profile',
+    'nav.logout': 'Logout',
+    'common.search': 'Search',
+    'common.add': 'Add',
+    'common.edit': 'Edit',
+    'common.delete': 'Delete',
+    'common.cancel': 'Cancel',
+    'common.save': 'Save',
+    'common.close': 'Close',
+    'common.confirm': 'Confirm',
+    'common.yes': 'Yes',
+    'common.no': 'No',
+    'common.loading': 'Loading...',
+    'common.error': 'Error',
+    'common.success': 'Success',
+    'common.actions': 'Actions',
+    'common.status': 'Status',
+    'common.name': 'Name',
+    'common.email': 'Email',
+    'common.role': 'Role',
+    'common.branch': 'Branch',
+    'common.submit': 'Submit',
+    'login.title': 'Welcome Back',
+    'login.subtitle': 'Sign in to your account',
+    'login.email': 'Email',
+    'login.password': 'Password',
+    'login.signin': 'Sign In',
+    'login.forgotPassword': 'Forgot Password?',
+    'login.noAccount': "Don't have an account?",
+    'login.signup': 'Sign up',
+    'dashboard.welcome': 'Welcome back',
+    'dashboard.overview': 'System Overview',
+    'students.title': 'Students',
+    'students.subtitle': 'Manage student records and enrollments',
+    'students.addStudent': 'Add Student',
+    'staff.title': 'Staff Management',
+    'staff.subtitle': 'Manage staff members and roles',
+    'staff.addStaff': 'Add Staff',
+    'classrooms.title': 'Classrooms',
+    'classrooms.subtitle': 'Manage classrooms and enrollments',
+    'classrooms.addClassroom': 'Add Classroom',
+    'library.title': 'Library',
+    'library.subtitle': 'Manage books and loans',
+    'library.addBook': 'Add Book',
+    'exams.title': 'Exams',
+    'exams.subtitle': 'Manage exams and assessments',
+    'exams.addExam': 'Add Exam',
+    'grades.title': 'Grades',
+    'grades.subtitle': 'View and manage student grades',
+    'branches.title': 'Branches',
+    'branches.subtitle': 'Manage school branches',
+    'branches.addBranch': 'Add Branch',
+    'approvals.title': 'Pending Approvals',
+    'approvals.subtitle': 'Review and approve pending registrations',
+    'reports.title': 'Reports',
+    'reports.subtitle': 'View system reports and analytics',
+    'settings.title': 'Settings',
+    'settings.subtitle': 'Manage system settings',
+    'profile.title': 'Profile',
+    'profile.subtitle': 'Manage your profile information',
+  },
+  es: {
+    'nav.dashboard': 'Panel',
+    'nav.students': 'Estudiantes',
+    'nav.staff': 'Personal',
+    'nav.classrooms': 'Aulas',
+    'nav.library': 'Biblioteca',
+    'nav.exams': 'Exámenes',
+    'nav.grades': 'Calificaciones',
+    'nav.branches': 'Sucursales',
+    'nav.approvals': 'Aprobaciones',
+    'nav.reports': 'Informes',
+    'nav.settings': 'Configuración',
+    'nav.profile': 'Perfil',
+    'nav.logout': 'Cerrar sesión',
+    'common.search': 'Buscar',
+    'common.add': 'Añadir',
+    'common.edit': 'Editar',
+    'common.delete': 'Eliminar',
+    'common.cancel': 'Cancelar',
+    'common.save': 'Guardar',
+    'common.close': 'Cerrar',
+    'common.confirm': 'Confirmar',
+    'common.yes': 'Sí',
+    'common.no': 'No',
+    'common.loading': 'Cargando...',
+    'common.error': 'Error',
+    'common.success': 'Éxito',
+    'common.actions': 'Acciones',
+    'common.status': 'Estado',
+    'common.name': 'Nombre',
+    'common.email': 'Correo electrónico',
+    'common.role': 'Rol',
+    'common.branch': 'Sucursal',
+    'common.submit': 'Enviar',
+    'login.title': 'Bienvenido de nuevo',
+    'login.subtitle': 'Inicia sesión en tu cuenta',
+    'login.email': 'Correo electrónico',
+    'login.password': 'Contraseña',
+    'login.signin': 'Iniciar sesión',
+    'login.forgotPassword': '¿Olvidaste tu contraseña?',
+    'login.noAccount': '¿No tienes una cuenta?',
+    'login.signup': 'Regístrate',
+    'dashboard.welcome': 'Bienvenido de nuevo',
+    'dashboard.overview': 'Resumen del sistema',
+    'students.title': 'Estudiantes',
+    'students.subtitle': 'Gestionar registros de estudiantes e inscripciones',
+    'students.addStudent': 'Añadir estudiante',
+    'staff.title': 'Gestión de personal',
+    'staff.subtitle': 'Gestionar miembros del personal y roles',
+    'staff.addStaff': 'Añadir personal',
+    'classrooms.title': 'Aulas',
+    'classrooms.subtitle': 'Gestionar aulas e inscripciones',
+    'classrooms.addClassroom': 'Añadir aula',
+    'library.title': 'Biblioteca',
+    'library.subtitle': 'Gestionar libros y préstamos',
+    'library.addBook': 'Añadir libro',
+    'exams.title': 'Exámenes',
+    'exams.subtitle': 'Gestionar exámenes y evaluaciones',
+    'exams.addExam': 'Añadir examen',
+    'grades.title': 'Calificaciones',
+    'grades.subtitle': 'Ver y gestionar calificaciones de estudiantes',
+    'branches.title': 'Sucursales',
+    'branches.subtitle': 'Gestionar sucursales escolares',
+    'branches.addBranch': 'Añadir sucursal',
+    'approvals.title': 'Aprobaciones pendientes',
+    'approvals.subtitle': 'Revisar y aprobar registros pendientes',
+    'reports.title': 'Informes',
+    'reports.subtitle': 'Ver informes y análisis del sistema',
+    'settings.title': 'Configuración',
+    'settings.subtitle': 'Gestionar configuración del sistema',
+    'profile.title': 'Perfil',
+    'profile.subtitle': 'Gestionar tu información de perfil',
+  },
+  ca: {
+    'nav.dashboard': 'Tauler',
+    'nav.students': 'Estudiants',
+    'nav.staff': 'Personal',
+    'nav.classrooms': 'Aules',
+    'nav.library': 'Biblioteca',
+    'nav.exams': 'Exàmens',
+    'nav.grades': 'Qualificacions',
+    'nav.branches': 'Branques',
+    'nav.approvals': 'Aprovacions',
+    'nav.reports': 'Informes',
+    'nav.settings': 'Configuració',
+    'nav.profile': 'Perfil',
+    'nav.logout': 'Tancar sessió',
+    'common.search': 'Cercar',
+    'common.add': 'Afegir',
+    'common.edit': 'Editar',
+    'common.delete': 'Eliminar',
+    'common.cancel': 'Cancel·lar',
+    'common.save': 'Desar',
+    'common.close': 'Tancar',
+    'common.confirm': 'Confirmar',
+    'common.yes': 'Sí',
+    'common.no': 'No',
+    'common.loading': 'Carregant...',
+    'common.error': 'Error',
+    'common.success': 'Èxit',
+    'common.actions': 'Accions',
+    'common.status': 'Estat',
+    'common.name': 'Nom',
+    'common.email': 'Correu electrònic',
+    'common.role': 'Rol',
+    'common.branch': 'Branca',
+    'common.submit': 'Enviar',
+    'login.title': 'Benvingut de nou',
+    'login.subtitle': 'Inicia sessió al teu compte',
+    'login.email': 'Correu electrònic',
+    'login.password': 'Contrasenya',
+    'login.signin': 'Iniciar sessió',
+    'login.forgotPassword': 'Has oblidat la contrasenya?',
+    'login.noAccount': 'No tens un compte?',
+    'login.signup': 'Registra\'t',
+    'dashboard.welcome': 'Benvingut de nou',
+    'dashboard.overview': 'Resum del sistema',
+    'students.title': 'Estudiants',
+    'students.subtitle': 'Gestionar registres d\'estudiants i inscripcions',
+    'students.addStudent': 'Afegir estudiant',
+    'staff.title': 'Gestió de personal',
+    'staff.subtitle': 'Gestionar membres del personal i rols',
+    'staff.addStaff': 'Afegir personal',
+    'classrooms.title': 'Aules',
+    'classrooms.subtitle': 'Gestionar aules i inscripcions',
+    'classrooms.addClassroom': 'Afegir aula',
+    'library.title': 'Biblioteca',
+    'library.subtitle': 'Gestionar llibres i préstecs',
+    'library.addBook': 'Afegir llibre',
+    'exams.title': 'Exàmens',
+    'exams.subtitle': 'Gestionar exàmens i avaluacions',
+    'exams.addExam': 'Afegir examen',
+    'grades.title': 'Qualificacions',
+    'grades.subtitle': 'Veure i gestionar qualificacions d\'estudiants',
+    'branches.title': 'Branques',
+    'branches.subtitle': 'Gestionar branques escolars',
+    'branches.addBranch': 'Afegir branca',
+    'approvals.title': 'Aprovacions pendents',
+    'approvals.subtitle': 'Revisar i aprovar registres pendents',
+    'reports.title': 'Informes',
+    'reports.subtitle': 'Veure informes i anàlisis del sistema',
+    'settings.title': 'Configuració',
+    'settings.subtitle': 'Gestionar configuració del sistema',
+    'profile.title': 'Perfil',
+    'profile.subtitle': 'Gestionar la teva informació de perfil',
+  },
+};
+
+export function LanguageProvider({ children }: { children: ReactNode }) {
+  const [language, setLanguageState] = useState<Language>(() => {
+    const saved = localStorage.getItem('language');
+    return (saved as Language) || 'en';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('language', language);
+    document.documentElement.lang = language;
+    document.documentElement.dir = 'ltr';
+  }, [language]);
+
+  const setLanguage = (lang: Language) => {
+    setLanguageState(lang);
+  };
+
+  const t = (key: string): string => {
+    return translations[language][key] || key;
+  };
+
+  return (
+    <LanguageContext.Provider value={{ language, setLanguage, t }}>
+      {children}
+    </LanguageContext.Provider>
+  );
+}
+
+export function useLanguage() {
+  const context = useContext(LanguageContext);
+  if (!context) {
+    throw new Error('useLanguage must be used within LanguageProvider');
+  }
+  return context;
+}

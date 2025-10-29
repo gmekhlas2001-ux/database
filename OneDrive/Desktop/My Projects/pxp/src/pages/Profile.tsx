@@ -3,6 +3,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { User, Mail, Phone, Calendar, MapPin, Save, FileText, Briefcase, CreditCard, Building2, Upload, FileUp, Lock, Key } from 'lucide-react';
 import { DocumentUpload } from '../components/DocumentUpload';
+import { ProfileImageDisplay } from '../components/ProfileImageDisplay';
+import { useFieldPermissions, isFieldVisible, isFieldEditable } from '../hooks/useFieldPermissions';
 
 interface Branch {
   id: string;
@@ -79,6 +81,7 @@ const EDUCATION_LEVELS = [
 
 export function Profile() {
   const { profile, user } = useAuth();
+  const { staff: staffPermissions, student: studentPermissions } = useFieldPermissions();
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingDetails, setLoadingDetails] = useState(true);
@@ -94,6 +97,12 @@ export function Profile() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordLoading, setPasswordLoading] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const [showChangeEmail, setShowChangeEmail] = useState(false);
+  const [newEmail, setNewEmail] = useState('');
+  const [emailPassword, setEmailPassword] = useState('');
+  const [emailLoading, setEmailLoading] = useState(false);
+  const [emailMessage, setEmailMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     loadBranches();
@@ -268,7 +277,6 @@ export function Profile() {
           address: formData.address,
           passport_number: formData.passport_number,
           phone: formData.phone,
-          email: formData.email,
           job_description: formData.job_description,
           short_bio: formData.short_bio,
           profile_photo_url: formData.profile_photo_url || null,
@@ -305,7 +313,6 @@ export function Profile() {
           address: formData.address,
           passport_number: formData.passport_number,
           phone: formData.phone,
-          email: formData.email,
           job_description: formData.job_description,
           short_bio: formData.short_bio,
           profile_photo_url: formData.profile_photo_url || null,
@@ -379,6 +386,67 @@ export function Profile() {
     }
   }
 
+  async function handleChangeEmail(e: React.FormEvent) {
+    e.preventDefault();
+    setEmailMessage(null);
+
+    if (!newEmail || !emailPassword) {
+      setEmailMessage({ type: 'error', text: 'Please fill in all fields' });
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(newEmail)) {
+      setEmailMessage({ type: 'error', text: 'Please enter a valid email address' });
+      return;
+    }
+
+    if (newEmail === profile?.email) {
+      setEmailMessage({ type: 'error', text: 'New email must be different from current email' });
+      return;
+    }
+
+    setEmailLoading(true);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        setEmailMessage({ type: 'error', text: 'You must be logged in to change your email' });
+        return;
+      }
+
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/change-email`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ newEmail, password: emailPassword }),
+        }
+      );
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        setEmailMessage({ type: 'error', text: result.error || 'Failed to change email' });
+      } else {
+        setEmailMessage({ type: 'success', text: result.message });
+        setNewEmail('');
+        setEmailPassword('');
+        setTimeout(async () => {
+          await supabase.auth.signOut();
+          window.location.href = '/login';
+        }, 2000);
+      }
+    } catch (error: any) {
+      setEmailMessage({ type: 'error', text: error.message || 'Failed to change email' });
+    } finally {
+      setEmailLoading(false);
+    }
+  }
+
   if (loadingDetails) {
     return (
       <div className="flex items-center justify-center h-96">
@@ -390,6 +458,11 @@ export function Profile() {
   const isStaff = profile?.role_id === 'teacher' || profile?.role_id === 'librarian' || profile?.role_id === 'admin';
   const isStudent = profile?.role_id === 'student';
   const detailsData = isStaff ? staffDetails : studentDetails;
+  const isSuperAdmin = profile?.is_super_admin || false;
+
+  const permissions = isStaff ? staffPermissions : studentPermissions;
+  const canSee = (fieldName: string) => isFieldVisible(permissions, fieldName, isSuperAdmin);
+  const canEdit = (fieldName: string) => isFieldEditable(permissions, fieldName, isSuperAdmin);
 
   return (
     <div className="space-y-6">
@@ -406,8 +479,8 @@ export function Profile() {
         <div className="px-8 pb-8">
           <div className="flex items-end justify-between -mt-16 mb-6">
             {formData.profile_photo_url ? (
-              <img
-                src={formData.profile_photo_url}
+              <ProfileImageDisplay
+                filePath={formData.profile_photo_url}
                 alt="Profile"
                 className="w-32 h-32 rounded-2xl object-cover border-4 border-white shadow-xl"
               />
@@ -424,6 +497,13 @@ export function Profile() {
                   className="px-6 py-2 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
                 >
                   Edit Profile
+                </button>
+                <button
+                  onClick={() => setShowChangeEmail(true)}
+                  className="flex items-center gap-2 px-6 py-2 bg-emerald-600 text-white rounded-xl font-medium hover:bg-emerald-700 transition-colors"
+                >
+                  <Mail className="w-4 h-4" />
+                  Change Email
                 </button>
                 <button
                   onClick={() => setShowChangePassword(true)}
@@ -451,93 +531,105 @@ export function Profile() {
           {editing ? (
             <form onSubmit={handleSubmit} className="space-y-6">
               <div className="grid md:grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    First Name <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    name="first_name"
-                    required
-                    value={formData.first_name}
-                    onChange={handleInputChange}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    Last Name <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    name="last_name"
-                    required
-                    value={formData.last_name}
-                    onChange={handleInputChange}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    National ID <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    name="national_id"
-                    required
-                    value={formData.national_id}
-                    onChange={handleInputChange}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    Age <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    name="age"
-                    required
-                    min="1"
-                    max="120"
-                    value={formData.age}
-                    onChange={handleInputChange}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    Gender <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    name="gender"
-                    required
-                    value={formData.gender}
-                    onChange={handleInputChange}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  >
-                    <option value="">Select Gender</option>
-                    <option value="male">Male</option>
-                    <option value="female">Female</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
-
-                {isStaff && (
+                {canSee('first_name') && (
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-2">
-                      Position <span className="text-red-500">*</span>
+                      First Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="first_name"
+                      required
+                      disabled={!canEdit('first_name')}
+                      value={formData.first_name}
+                      onChange={handleInputChange}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
+
+                {canSee('last_name') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Last Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="last_name"
+                      required
+                      disabled={!canEdit('last_name')}
+                      value={formData.last_name}
+                      onChange={handleInputChange}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
+
+                {canSee('national_id') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      National ID
+                    </label>
+                    <input
+                      type="text"
+                      name="national_id"
+                      disabled={!canEdit('national_id')}
+                      value={formData.national_id}
+                      onChange={handleInputChange}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
+
+                {canSee('age') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Age
+                    </label>
+                    <input
+                      type="number"
+                      name="age"
+                      min="1"
+                      max="120"
+                      disabled={!canEdit('age')}
+                      value={formData.age}
+                      onChange={handleInputChange}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
+
+                {canSee('gender') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Gender
+                    </label>
+                    <select
+                      name="gender"
+                      disabled={!canEdit('gender')}
+                      value={formData.gender}
+                      onChange={handleInputChange}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    >
+                      <option value="">Select Gender</option>
+                      <option value="male">Male</option>
+                      <option value="female">Female</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                )}
+
+                {isStaff && canSee('position') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Position
                     </label>
                     <select
                       name="position"
-                      required
+                      disabled={!canEdit('position')}
                       value={formData.position}
                       onChange={handleInputChange}
-                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
                     >
                       <option value="">Select Position</option>
                       {STAFF_POSITIONS.map(pos => (
@@ -547,17 +639,17 @@ export function Profile() {
                   </div>
                 )}
 
-                {isStudent && (
+                {isStudent && canSee('education_level') && (
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-2">
-                      Level of Education <span className="text-red-500">*</span>
+                      Level of Education
                     </label>
                     <select
                       name="education_level"
-                      required
+                      disabled={!canEdit('education_level')}
                       value={formData.education_level}
                       onChange={handleInputChange}
-                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
                     >
                       <option value="">Select Education Level</option>
                       {EDUCATION_LEVELS.map(level => (
@@ -567,148 +659,156 @@ export function Profile() {
                   </div>
                 )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    Date of Birth <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="date"
-                    name="dob"
-                    required
-                    value={formData.dob}
-                    onChange={handleInputChange}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
+                {canSee('dob') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Date of Birth
+                    </label>
+                    <input
+                      type="date"
+                      name="dob"
+                      disabled={!canEdit('dob')}
+                      value={formData.dob}
+                      onChange={handleInputChange}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    Branch <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    name="branch_id"
-                    required
-                    value={formData.branch_id}
-                    onChange={handleInputChange}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  >
-                    <option value="">Select Branch</option>
-                    {branches.map(branch => (
-                      <option key={branch.id} value={branch.id}>
-                        {branch.name}{branch.province && ` - ${branch.province}`}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {canSee('branch_id') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Branch
+                    </label>
+                    <select
+                      name="branch_id"
+                      disabled={!canEdit('branch_id')}
+                      value={formData.branch_id}
+                      onChange={handleInputChange}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    >
+                      <option value="">Select Branch</option>
+                      {branches.map(branch => (
+                        <option key={branch.id} value={branch.id}>
+                          {branch.name}{branch.province && ` - ${branch.province}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    Date Joined <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="date"
-                    name="date_joined"
-                    required
-                    value={formData.date_joined}
-                    onChange={handleInputChange}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
+                {canSee('date_joined') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Date Joined
+                    </label>
+                    <input
+                      type="date"
+                      name="date_joined"
+                      disabled={!canEdit('date_joined')}
+                      value={formData.date_joined}
+                      onChange={handleInputChange}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    Date Left (Leave blank if present)
-                  </label>
-                  <input
-                    type="date"
-                    name="date_left"
-                    value={formData.date_left || ''}
-                    onChange={handleDateLeftChange}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
+                {canSee('date_left') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Date Left (Leave blank if present)
+                    </label>
+                    <input
+                      type="date"
+                      name="date_left"
+                      disabled={!canEdit('date_left')}
+                      value={formData.date_left || ''}
+                      onChange={handleDateLeftChange}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    Passport Number
-                  </label>
-                  <input
-                    type="text"
-                    name="passport_number"
-                    value={formData.passport_number}
-                    onChange={handleInputChange}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
+                {canSee('passport_number') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Passport Number
+                    </label>
+                    <input
+                      type="text"
+                      name="passport_number"
+                      disabled={!canEdit('passport_number')}
+                      value={formData.passport_number}
+                      onChange={handleInputChange}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    Phone <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="tel"
-                    name="phone"
-                    required
-                    value={formData.phone}
-                    onChange={handleInputChange}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    Email <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="email"
-                    name="email"
-                    required
-                    value={formData.email}
-                    onChange={handleInputChange}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  />
-                </div>
+                {canSee('phone') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Phone
+                    </label>
+                    <input
+                      type="tel"
+                      name="phone"
+                      disabled={!canEdit('phone')}
+                      value={formData.phone}
+                      onChange={handleInputChange}
+                      className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
-                  Address <span className="text-red-500">*</span>
-                </label>
-                <textarea
-                  name="address"
-                  required
-                  rows={3}
-                  value={formData.address}
-                  onChange={handleInputChange}
-                  className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none"
-                />
-              </div>
+              {canSee('address') && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Address
+                  </label>
+                  <textarea
+                    name="address"
+                    rows={3}
+                    disabled={!canEdit('address')}
+                    value={formData.address}
+                    onChange={handleInputChange}
+                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none disabled:bg-slate-100 disabled:cursor-not-allowed"
+                  />
+                </div>
+              )}
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
-                  Job Description
-                </label>
-                <textarea
-                  name="job_description"
-                  rows={3}
-                  value={formData.job_description}
-                  onChange={handleInputChange}
-                  className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none"
-                />
-              </div>
+              {canSee('job_description') && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Job Description
+                  </label>
+                  <textarea
+                    name="job_description"
+                    rows={3}
+                    disabled={!canEdit('job_description')}
+                    value={formData.job_description}
+                    onChange={handleInputChange}
+                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none disabled:bg-slate-100 disabled:cursor-not-allowed"
+                  />
+                </div>
+              )}
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
-                  Short Bio
-                </label>
-                <textarea
-                  name="short_bio"
-                  rows={3}
-                  value={formData.short_bio}
-                  onChange={handleInputChange}
-                  className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none"
-                />
-              </div>
+              {canSee('short_bio') && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Short Bio
+                  </label>
+                  <textarea
+                    name="short_bio"
+                    rows={3}
+                    disabled={!canEdit('short_bio')}
+                    value={formData.short_bio}
+                    onChange={handleInputChange}
+                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none disabled:bg-slate-100 disabled:cursor-not-allowed"
+                  />
+                </div>
+              )}
 
               <div className="border-t border-slate-200 pt-6">
                 <h3 className="text-lg font-semibold text-slate-900 mb-4">Documents</h3>
@@ -995,6 +1095,108 @@ export function Profile() {
           )}
         </div>
       </div>
+
+      {showChangeEmail && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center">
+                <Mail className="w-6 h-6 text-emerald-600" />
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold text-slate-900">Change Email</h2>
+                <p className="text-sm text-slate-600">Update your account email address</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleChangeEmail} className="space-y-4">
+              <div>
+                <label htmlFor="current-email" className="block text-sm font-medium text-slate-700 mb-2">
+                  Current Email
+                </label>
+                <input
+                  id="current-email"
+                  type="email"
+                  disabled
+                  value={profile?.email || ''}
+                  className="w-full px-4 py-3 border border-slate-300 rounded-xl bg-slate-50 text-slate-600"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="new-email" className="block text-sm font-medium text-slate-700 mb-2">
+                  New Email Address
+                </label>
+                <input
+                  id="new-email"
+                  type="email"
+                  required
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                  placeholder="Enter new email address"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="email-password" className="block text-sm font-medium text-slate-700 mb-2">
+                  Current Password
+                </label>
+                <input
+                  id="email-password"
+                  type="password"
+                  required
+                  value={emailPassword}
+                  onChange={(e) => setEmailPassword(e.target.value)}
+                  className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                  placeholder="Verify with your password"
+                />
+                <p className="text-xs text-slate-500 mt-1">Required to confirm your identity</p>
+              </div>
+
+              {emailMessage && (
+                <div
+                  className={`p-4 rounded-xl text-sm ${
+                    emailMessage.type === 'success'
+                      ? 'bg-green-50 border border-green-200 text-green-700'
+                      : 'bg-red-50 border border-red-200 text-red-700'
+                  }`}
+                >
+                  {emailMessage.text}
+                </div>
+              )}
+
+              <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl">
+                <p className="text-sm text-amber-800">
+                  <strong>Important:</strong> After changing your email, you will be logged out and must sign in with your new email address.
+                </p>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowChangeEmail(false);
+                    setNewEmail('');
+                    setEmailPassword('');
+                    setEmailMessage(null);
+                  }}
+                  className="flex-1 px-4 py-3 border border-slate-300 text-slate-700 rounded-xl font-medium hover:bg-slate-50 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={emailLoading}
+                  className="flex-1 bg-emerald-600 text-white py-3 px-4 rounded-xl font-medium hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                >
+                  {emailLoading ? 'Changing...' : 'Change Email'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {showChangePassword && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">

@@ -31,6 +31,7 @@ export interface Database {
           full_name: string | null
           role_id: string | null
           status: string | null
+          is_super_admin: boolean | null
           created_at: string | null
           updated_at: string | null
         }
@@ -41,6 +42,7 @@ export interface Database {
           full_name?: string | null
           role_id?: string | null
           status?: string | null
+          is_super_admin?: boolean | null
           created_at?: string | null
           updated_at?: string | null
         }
@@ -51,6 +53,7 @@ export interface Database {
           full_name?: string | null
           role_id?: string | null
           status?: string | null
+          is_super_admin?: boolean | null
           created_at?: string | null
           updated_at?: string | null
         }

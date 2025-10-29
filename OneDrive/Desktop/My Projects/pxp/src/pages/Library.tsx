@@ -17,7 +17,9 @@ import {
   Check,
   XCircle,
   Clock,
-  CheckCircle
+  CheckCircle,
+  Phone,
+  Mail
 } from 'lucide-react';
 
 interface Book {
@@ -44,6 +46,9 @@ interface BookLoan {
   borrower_id: string;
   borrower_name: string;
   borrower_type: string;
+  borrower_phone: string | null;
+  borrower_email: string | null;
+  borrower_branch: string | null;
   loan_date: string | null;
   due_date: string | null;
   return_date: string | null;
@@ -140,27 +145,69 @@ export function Library() {
     try {
       const { data, error } = await supabase
         .from('book_loans')
-        .select('*, books(title), profiles!book_loans_borrower_id_fkey(full_name)')
+        .select(`
+          *,
+          books(title),
+          profiles!book_loans_borrower_id_fkey(full_name, id)
+        `)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
 
-      const loansWithDetails = data?.map(loan => ({
-        id: loan.id,
-        book_id: loan.book_id,
-        book_title: loan.books?.title || 'Unknown',
-        borrower_id: loan.borrower_id,
-        borrower_name: loan.profiles?.full_name || 'Unknown',
-        borrower_type: loan.borrower_type,
-        loan_date: loan.loan_date,
-        due_date: loan.due_date,
-        return_date: loan.return_date,
-        status: loan.status,
-        approved_by: loan.approved_by,
-        approved_at: loan.approved_at,
-        notes: loan.notes,
-        created_at: loan.created_at,
-      })) || [];
+      // Get additional borrower details from students or staff tables
+      const loansWithDetails = await Promise.all(
+        (data || []).map(async (loan) => {
+          let borrowerPhone = null;
+          let borrowerEmail = null;
+          let borrowerBranch = null;
+
+          if (loan.borrower_type === 'student') {
+            const { data: studentData } = await supabase
+              .from('students')
+              .select('phone, email, branches(name)')
+              .eq('profile_id', loan.profiles?.id)
+              .maybeSingle();
+
+            if (studentData) {
+              borrowerPhone = studentData.phone;
+              borrowerEmail = studentData.email;
+              borrowerBranch = studentData.branches?.name;
+            }
+          } else {
+            const { data: staffData } = await supabase
+              .from('staff')
+              .select('phone, email, branches(name)')
+              .eq('profile_id', loan.profiles?.id)
+              .maybeSingle();
+
+            if (staffData) {
+              borrowerPhone = staffData.phone;
+              borrowerEmail = staffData.email;
+              borrowerBranch = staffData.branches?.name;
+            }
+          }
+
+          return {
+            id: loan.id,
+            book_id: loan.book_id,
+            book_title: loan.books?.title || 'Unknown',
+            borrower_id: loan.borrower_id,
+            borrower_name: loan.profiles?.full_name || 'Unknown',
+            borrower_type: loan.borrower_type,
+            borrower_phone: borrowerPhone,
+            borrower_email: borrowerEmail,
+            borrower_branch: borrowerBranch,
+            loan_date: loan.loan_date,
+            due_date: loan.due_date,
+            return_date: loan.return_date,
+            status: loan.status,
+            approved_by: loan.approved_by,
+            approved_at: loan.approved_at,
+            notes: loan.notes,
+            created_at: loan.created_at,
+          };
+        })
+      );
 
       setLoans(loansWithDetails);
     } catch (error) {
@@ -1111,6 +1158,28 @@ function LoanCard({
           <StatusIcon className="w-3 h-3" />
           {loan.status}
         </span>
+      </div>
+
+      {/* Borrower Contact Details */}
+      <div className="mb-3 space-y-2">
+        {loan.borrower_phone && (
+          <div className="flex items-center gap-2 text-sm text-slate-600">
+            <Phone className="w-4 h-4" />
+            <span>{loan.borrower_phone}</span>
+          </div>
+        )}
+        {loan.borrower_email && (
+          <div className="flex items-center gap-2 text-sm text-slate-600">
+            <Mail className="w-4 h-4" />
+            <span>{loan.borrower_email}</span>
+          </div>
+        )}
+        {loan.borrower_branch && (
+          <div className="flex items-center gap-2 text-sm text-slate-600">
+            <Building2 className="w-4 h-4" />
+            <span>{loan.borrower_branch}</span>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-2 text-sm mb-3">

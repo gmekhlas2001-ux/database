@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Upload, X, File, ExternalLink, Download, User } from 'lucide-react';
+import { ProfileImageDisplay } from './ProfileImageDisplay';
 
 interface DocumentUploadProps {
   userId: string;
@@ -44,11 +45,7 @@ export function DocumentUpload({
 
       if (uploadError) throw uploadError;
 
-      const { data: { publicUrl } } = supabase.storage
-        .from('documents')
-        .getPublicUrl(fileName);
-
-      onUploadComplete(publicUrl);
+      onUploadComplete(fileName);
     } catch (error: any) {
       setError(error.message);
       console.error('Upload error:', error);
@@ -61,23 +58,24 @@ export function DocumentUpload({
     if (!currentUrl) return;
 
     try {
-      const path = currentUrl.split('/documents/')[1];
-      if (path) {
-        const { data, error } = await supabase.storage
-          .from('documents')
-          .download(path);
+      const path = currentUrl.includes('/documents/')
+        ? currentUrl.split('/documents/')[1]
+        : currentUrl;
 
-        if (error) throw error;
+      const { data, error } = await supabase.storage
+        .from('documents')
+        .download(path);
 
-        const url = URL.createObjectURL(data);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = path.split('/').pop() || 'download';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }
+      if (error) throw error;
+
+      const url = URL.createObjectURL(data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = path.split('/').pop() || 'download';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     } catch (error: any) {
       setError(error.message);
     }
@@ -87,11 +85,12 @@ export function DocumentUpload({
     if (!currentUrl || !confirm('Are you sure you want to delete this document?')) return;
 
     try {
-      const path = currentUrl.split('/documents/')[1];
-      if (path) {
-        await supabase.storage.from('documents').remove([path]);
-        onUploadComplete('');
-      }
+      const path = currentUrl.includes('/documents/')
+        ? currentUrl.split('/documents/')[1]
+        : currentUrl;
+
+      await supabase.storage.from('documents').remove([path]);
+      onUploadComplete('');
     } catch (error: any) {
       setError(error.message);
     }
@@ -105,11 +104,7 @@ export function DocumentUpload({
         documentType === 'profile_photo' ? (
           <div className="space-y-2">
             <div className="relative group">
-              <img
-                src={currentUrl}
-                alt="Profile"
-                className="w-32 h-32 rounded-full object-cover border-4 border-slate-200"
-              />
+              <ProfileImageDisplay filePath={currentUrl} />
               <button
                 type="button"
                 onClick={handleDelete}
